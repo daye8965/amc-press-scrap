@@ -10,6 +10,7 @@
 """
 import csv
 import html
+import io
 import json
 import os
 import re
@@ -93,10 +94,34 @@ class SetupError(Exception):
     pass
 
 
+def safe_tessdata(path):
+    """OCR 엔진은 Windows '시스템 문자셋'으로 표현 못 하는 경로를 읽지 못함.
+    그런 경로면 한국어 데이터를 영문 경로(ProgramData 또는 임시 폴더)로 복사해서 씀."""
+    if os.name != 'nt':
+        return path
+    try:
+        path.encode('mbcs', 'strict')
+        return path
+    except UnicodeError:
+        pass
+    for base in (os.environ.get('PROGRAMDATA', ''), r'C:\ScrapFinderData', os.environ.get('TEMP', '')):
+        if not base:
+            continue
+        dst = os.path.join(base, 'ScrapFinder', 'tessdata')
+        try:
+            dst.encode('mbcs', 'strict')
+            if not os.path.isfile(os.path.join(dst, 'kor.traineddata')):
+                shutil.copytree(path, dst, dirs_exist_ok=True)
+            return dst
+        except Exception:
+            continue
+    return path
+
+
 def find_tesseract():
     bundled = os.path.join(HERE, 'tesseract', 'tesseract.exe')
     if os.path.isfile(bundled):                  # 프로그램에 같이 들어 있는 OCR 엔진
-        os.environ['TESSDATA_PREFIX'] = os.path.join(HERE, 'tesseract', 'tessdata')
+        os.environ['TESSDATA_PREFIX'] = safe_tessdata(os.path.join(HERE, 'tesseract', 'tessdata'))
         return bundled
     cands = [shutil.which('tesseract'),
              r'C:\Program Files\Tesseract-OCR\tesseract.exe',
@@ -112,17 +137,19 @@ def _tesseract_tsv(tess, im, scale, base):
     """im을 scale배로 바꿔 OCR → base.tsv 저장. 이미 있으면 다시 읽지 않음(캐시)."""
     tsv = base + '.tsv'
     if not os.path.exists(tsv):
-        tmp = base + '_ocr.png'
         g = im.convert('L')
         if scale != 1.0:
             g = g.resize((max(1, round(im.width * scale)), max(1, round(im.height * scale))), Image.LANCZOS)
-        g.save(tmp)
+        buf = io.BytesIO()
+        g.save(buf, 'PNG')
+        # Windows용 Tesseract는 한글 경로를 다루지 못할 때가 있어 파일 경로 대신 메모리로 주고받음
         env = dict(os.environ, OMP_THREAD_LIMIT='1')   # 여러 면을 동시에 돌릴 때 CPU 경합 방지
-        r = subprocess.run([tess, tmp, base, '-l', 'kor', '--psm', '3', 'tsv'],
-                           capture_output=True, env=env, creationflags=NO_WINDOW)
-        os.remove(tmp)
-        if r.returncode != 0:
-            raise RuntimeError(r.stderr.decode('utf-8', 'replace')[-500:])
+        r = subprocess.run([tess, 'stdin', 'stdout', '-l', 'kor', '--psm', '3', 'tsv'],
+                           input=buf.getvalue(), capture_output=True, env=env, creationflags=NO_WINDOW)
+        if r.returncode != 0 or not r.stdout:
+            raise RuntimeError(r.stderr.decode('utf-8', 'replace')[-500:] or 'OCR 결과가 비어 있습니다')
+        with open(tsv, 'wb') as f:
+            f.write(r.stdout)
     words = []
     with open(tsv, encoding='utf-8') as f:
         for row in csv.DictReader(f, delimiter='\t', quoting=csv.QUOTE_NONE):
@@ -137,12 +164,12 @@ def _tesseract_tsv(tess, im, scale, base):
     return words
 
 
-def ocr_page(tess, src, work):
+def ocr_page(tess, src, work, root):
     """한 면을 두 번 읽음.
     ① 본문용: 작은 지면은 확대해서 읽음 (작은 글씨 오인식 방지)
     ② 제목용: 가로 900픽셀로 줄여서 읽음 (Tesseract는 아주 큰 글씨를 건너뛰는 경향이 있음)
     좌표는 모두 원본 이미지 기준으로 돌려줌."""
-    key = os.path.splitext(os.path.relpath(src, os.path.dirname(work)))[0]
+    key = os.path.splitext(os.path.relpath(src, root))[0]
     base = os.path.join(work, re.sub(r'[\\/:]', '__', key))
     stamp = base + '.ok'
     im = Image.open(src)
@@ -520,7 +547,7 @@ def run(folder, log=print, progress=None, stop=None):
     if progress:
         progress(0, len(srcs))
     with ThreadPoolExecutor(max_workers=max(1, (os.cpu_count() or 2))) as ex:
-        futs = {ex.submit(ocr_page, tess, s, work): k for k, s in enumerate(srcs)}
+        futs = {ex.submit(ocr_page, tess, s, work, folder): k for k, s in enumerate(srcs)}
         for fu in as_completed(futs):
             if stop and stop():
                 for f in futs:
