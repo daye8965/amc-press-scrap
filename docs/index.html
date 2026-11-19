@@ -1,0 +1,574 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>언론 스크랩 만들기</title>
+<style>
+:root{
+  --bg:#f4f5f7; --panel:#fff; --ink:#1c2230; --mut:#6b7280; --line:#dfe3ea;
+  --acc:#0b5ed7; --acc-ink:#fff; --sel:#ff6a00; --done:#16a34a; --warn:#b45309;
+}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 "Malgun Gothic","맑은 고딕","Apple SD Gothic Neo",sans-serif}
+button,input,select,textarea{font:inherit;color:inherit}
+button{cursor:pointer;border:1px solid var(--line);background:#fff;border-radius:6px;padding:5px 10px}
+button:hover{border-color:#b8c0cc}
+button.pri{background:var(--acc);border-color:var(--acc);color:var(--acc-ink);font-weight:700}
+button.pri:disabled{opacity:.45;cursor:default}
+button.ghost{border-color:transparent;background:transparent;padding:2px 6px;color:var(--mut)}
+button.ghost:hover{color:var(--ink);background:#eef1f5}
+input[type=text],input[type=date],select,textarea{border:1px solid var(--line);border-radius:6px;padding:5px 8px;background:#fff}
+label.f{display:block;font-size:12px;color:var(--mut);margin:8px 0 2px}
+
+/* ── 레이아웃 ── */
+#app{display:grid;grid-template-rows:auto 1fr;height:100vh}
+header{display:flex;align-items:center;gap:12px;padding:8px 14px;background:var(--panel);border-bottom:1px solid var(--line)}
+header h1{font-size:16px;margin:0 8px 0 0;white-space:nowrap}
+header .sp{flex:1}
+main{display:grid;grid-template-columns:200px 1fr 330px;min-height:0}
+#pages,#scraps{background:var(--panel);overflow:auto;min-height:0}
+#pages{border-right:1px solid var(--line)}
+#scraps{border-left:1px solid var(--line);display:flex;flex-direction:column}
+
+/* ── 지면 목록 ── */
+.grp{padding:8px 10px 2px;font-weight:700;font-size:12px;color:var(--mut);position:sticky;top:0;background:var(--panel);z-index:1}
+.thumb{display:flex;gap:8px;align-items:center;padding:5px 10px;cursor:pointer;border-left:3px solid transparent}
+.thumb:hover{background:#f3f5f8}
+.thumb.on{background:#e8f0fe;border-left-color:var(--acc)}
+.thumb img{width:46px;height:64px;object-fit:cover;object-position:top;border:1px solid var(--line);background:#fff}
+.thumb .t{font-size:12px;line-height:1.35;overflow:hidden}
+.thumb .t b{display:block}
+.thumb .n{font-size:11px;color:var(--done)}
+
+/* ── 지면 보기 ── */
+#view{display:grid;grid-template-rows:auto 1fr;min-height:0;min-width:0}
+#pagebar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:7px 12px;background:#fbfbfc;border-bottom:1px solid var(--line)}
+#pagebar input{width:90px}
+#pagebar input.media{width:110px}
+#pagebar .sp{flex:1}
+#stage{overflow:auto;position:relative;min-height:0;background:#e9ebef}
+#canvas{position:relative;margin:16px auto;user-select:none;-webkit-user-select:none;cursor:crosshair;box-shadow:0 1px 6px rgba(0,0,0,.15);background:#fff}
+#canvas img{display:block;width:100%;height:100%;pointer-events:none}
+.rect{position:absolute;border:2px solid var(--sel);background:rgba(255,106,0,.12)}
+.rect .no{position:absolute;left:-2px;top:-22px;background:var(--sel);color:#fff;font-size:12px;font-weight:700;padding:0 6px;border-radius:3px 3px 0 0}
+.rect .x{position:absolute;right:-2px;top:-22px;background:var(--sel);color:#fff;border:0;border-radius:3px 3px 0 0;padding:0 6px;font-size:12px;line-height:20px}
+.rect.saved{border:2px dashed var(--done);background:rgba(22,163,74,.08);pointer-events:none}
+.rect.saved .no{background:var(--done)}
+.rect.drawing{border-style:dashed}
+#empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;color:var(--mut);padding:30px}
+#empty .box{border:2px dashed #c3c9d3;border-radius:14px;padding:40px 46px;background:#fff;max-width:560px}
+#empty h2{color:var(--ink);margin:0 0 10px;font-size:20px}
+#empty ol{text-align:left;margin:16px 0 18px;padding-left:20px;line-height:1.9}
+body.dragging #empty .box{border-color:var(--acc);background:#eef4ff}
+
+/* 담기 폼 */
+#addbox{position:sticky;bottom:0;left:0;right:0;display:none;background:var(--panel);border-top:2px solid var(--sel);padding:10px 14px;box-shadow:0 -4px 14px rgba(0,0,0,.08);z-index:5}
+#addbox.on{display:block}
+#addbox .row{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end}
+#addbox .row > div{display:flex;flex-direction:column}
+#addbox .grow{flex:1;min-width:240px}
+#addbox .hint{font-size:12px;color:var(--mut);margin-top:6px}
+
+/* ── 스크랩 목록 ── */
+#scraps .top{padding:10px 12px;border-bottom:1px solid var(--line)}
+#scraps .top .row{display:flex;gap:8px;align-items:center}
+#list{flex:1;overflow:auto;padding:4px 0 20px}
+.cat{padding:10px 12px 4px;font-weight:700;border-bottom:1px solid var(--line);display:flex;justify-content:space-between}
+.cat small{color:var(--mut);font-weight:400}
+.item{display:flex;gap:8px;padding:8px 12px;border-bottom:1px solid #eef0f3;align-items:flex-start}
+.item:hover{background:#fafbfc}
+.item img{width:44px;height:44px;object-fit:cover;object-position:top;border:1px solid var(--line);flex:none;cursor:pointer}
+.item .body{flex:1;min-width:0;cursor:pointer}
+.item .ti{font-weight:700;font-size:13px;line-height:1.35}
+.item .me{font-size:12px;color:var(--mut)}
+.item .memo{font-size:12px;color:var(--warn)}
+.item .ops{display:flex;flex-direction:column}
+.none{padding:6px 12px;color:var(--mut);font-size:12px}
+
+/* 대화상자 */
+dialog{border:0;border-radius:12px;padding:0;box-shadow:0 10px 40px rgba(0,0,0,.25);width:min(560px,94vw)}
+dialog::backdrop{background:rgba(20,24,32,.45)}
+dialog form{padding:18px 20px}
+dialog h3{margin:0 0 6px}
+dialog .btns{display:flex;justify-content:space-between;margin-top:16px;gap:8px}
+dialog .pv{display:flex;gap:6px;overflow:auto;max-height:180px;margin-top:10px}
+dialog .pv img{max-height:170px;border:1px solid var(--line)}
+.toast{position:fixed;left:50%;top:62px;transform:translateX(-50%);background:#1c2230;color:#fff;padding:9px 16px;border-radius:8px;font-size:13px;opacity:0;transition:opacity .2s;pointer-events:none;z-index:50}
+.toast.on{opacity:1}
+kbd{border:1px solid #c9ced6;border-bottom-width:2px;border-radius:4px;padding:0 5px;font-size:12px;background:#fff}
+
+/* ── 인쇄(PDF) ── */
+#print{display:none}
+@page{size:A4;margin:14mm 13mm}
+@media print{
+  body{background:#fff}
+  #app,dialog,.toast{display:none!important}
+  #print{display:block;color:#000;font-family:"Malgun Gothic","맑은 고딕","Apple SD Gothic Neo",sans-serif}
+  .cover{page-break-after:always;font-size:11.5pt;line-height:1.75}
+  .cover h1{font-size:15pt;text-align:center;margin:4mm 0 9mm;font-weight:700}
+  .cover .c{font-weight:700;margin-top:5mm}
+  .cover .i{margin-left:2mm}
+  .cover .m{margin-left:6mm}
+  .art{break-inside:avoid;page-break-inside:avoid;margin-bottom:8mm}
+  .art .h{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:.4mm solid #000;padding-bottom:1.2mm;margin-bottom:2.5mm}
+  .art .logo{font-size:15pt;font-weight:800;letter-spacing:-.5pt}
+  .art .logo img{height:9mm;display:block}
+  .art .when{font-size:10pt}
+  .art .pcs{display:flex;gap:3mm;align-items:flex-start}
+  .art .pcs.v{flex-direction:column;align-items:center}
+  .art .pcs img{max-width:100%;max-height:238mm;object-fit:contain}
+  .art .pcs.h img{flex:1 1 0;min-width:0;max-height:238mm}
+}
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1>언론 스크랩 만들기</h1>
+    <button id="btnFiles">지면 이미지 불러오기</button>
+    <button id="btnFolder">폴더째 불러오기</button>
+    <input id="inFiles" type="file" accept="image/*" multiple hidden>
+    <input id="inFolder" type="file" webkitdirectory multiple hidden>
+    <span class="sp"></span>
+    <span style="color:var(--mut);font-size:12px"><kbd>←</kbd><kbd>→</kbd> 지면 넘기기 · 드래그로 오리기 · <kbd>Shift</kbd>+드래그 조각 추가 · <kbd>Esc</kbd> 취소</span>
+  </header>
+  <main>
+    <nav id="pages"><div class="none" style="padding:14px 12px">불러온 지면이 없습니다.</div></nav>
+
+    <section id="view">
+      <div id="pagebar" hidden>
+        <b id="pgTitle"></b>
+        <span style="color:var(--mut)">|</span>
+        매체 <input class="media" id="pgMedia" type="text" list="mediaList" placeholder="예: 조선일보">
+        면 <input id="pgPage" type="text" placeholder="예: A12">
+        섹션 <input id="pgSection" type="text" placeholder="예: 사회">
+        <span class="sp"></span>
+        <button id="zOut" title="축소">−</button>
+        <button id="zFit" title="폭에 맞춤">맞춤</button>
+        <button id="zIn" title="확대">＋</button>
+      </div>
+      <div id="stage">
+        <div id="canvas" hidden><img id="pgImg" alt=""></div>
+        <div id="empty"><div class="box">
+          <h2>지면 이미지를 여기로 끌어다 놓으세요</h2>
+          스크랩마스터에서 이미지로 저장한 그날 지면(폴더째 가능)
+          <ol>
+            <li>왼쪽에서 지면을 넘겨 보다가</li>
+            <li>기사를 <b>드래그로 오리고</b> (단이 꺾이면 <kbd>Shift</kbd>+드래그로 조각 추가)</li>
+            <li>분류·제목·도움말을 적어 <b>스크랩에 담고</b></li>
+            <li>오른쪽 <b>「PDF 만들기」</b>로 저장</li>
+          </ol>
+          <button class="pri" onclick="inFolder.click()">폴더 선택</button>
+          <button onclick="inFiles.click()">파일 선택</button>
+          <div style="font-size:12px;margin-top:14px">지면 파일은 이 PC의 브라우저 안에서만 열리고 어디로도 올라가지 않습니다.</div>
+        </div></div>
+        <div id="addbox">
+          <div class="row">
+            <div><label class="f">분류</label><select id="aCat"></select></div>
+            <div class="grow"><label class="f">기사 제목</label><input id="aTitle" type="text" placeholder="지면의 제목을 그대로 적어 주세요"></div>
+            <div class="grow"><label class="f">도움말·메모 (목차 아랫줄, 선택)</label><input id="aMemo" type="text" placeholder="예) 서울아산병원 피부과 ○○○ 교수 도움말"></div>
+            <div><button class="pri" id="aAdd">스크랩에 담기 ⏎</button></div>
+            <div><button id="aCancel">취소</button></div>
+          </div>
+          <div class="hint" id="aHint"></div>
+        </div>
+      </div>
+    </section>
+
+    <aside id="scraps">
+      <div class="top">
+        <div class="row">
+          <label style="white-space:nowrap">스크랩 날짜</label>
+          <input id="date" type="date" style="flex:1">
+        </div>
+        <div class="row" style="margin-top:8px">
+          <button class="pri" id="btnPdf" style="flex:1">PDF 만들기</button>
+          <button id="btnToc" title="목차 글자만 복사">목차 복사</button>
+        </div>
+        <div class="row" style="margin-top:6px;justify-content:space-between">
+          <span id="count" style="font-size:12px;color:var(--mut)"></span>
+          <span>
+            <button class="ghost" id="btnLogos" title="신문사 로고 이미지를 등록하면 PDF에 글자 대신 로고가 들어갑니다">로고 등록</button>
+            <button class="ghost" id="btnClear">모두 비우기</button>
+          </span>
+        </div>
+        <input id="inLogos" type="file" accept="image/*" multiple hidden>
+      </div>
+      <div id="list"></div>
+    </aside>
+  </main>
+</div>
+
+<dialog id="dlg"><form method="dialog">
+  <h3>스크랩 수정</h3>
+  <label class="f">분류</label><select id="eCat"></select>
+  <label class="f">기사 제목</label><input id="eTitle" type="text" style="width:100%">
+  <label class="f">도움말·메모</label><input id="eMemo" type="text" style="width:100%">
+  <div style="display:flex;gap:8px">
+    <div style="flex:1"><label class="f">매체</label><input id="eMedia" type="text" list="mediaList" style="width:100%"></div>
+    <div style="width:90px"><label class="f">면</label><input id="ePage" type="text" style="width:100%"></div>
+    <div style="width:110px"><label class="f">섹션</label><input id="eSection" type="text" style="width:100%"></div>
+  </div>
+  <label class="f">조각 배치 (조각이 여러 개일 때)</label>
+  <select id="eLayout"><option value="v">위아래로 이어 붙이기</option><option value="h">옆으로 나란히</option></select>
+  <div class="pv" id="ePv"></div>
+  <div class="btns">
+    <span><button value="del" id="eDel" style="color:#b91c1c">삭제</button> <button value="goto" id="eGoto">지면에서 보기</button></span>
+    <span><button value="cancel">닫기</button> <button value="ok" class="pri">저장</button></span>
+  </div>
+</form></dialog>
+
+<datalist id="mediaList"></datalist>
+<div class="toast" id="toast"></div>
+<div id="print"></div>
+
+<script>
+'use strict';
+const CATS = ['서울아산병원', '주요병원', '의료/정책', '기타'];
+const MEDIA = ['조선일보','중앙일보','동아일보','한국일보','경향신문','한겨레','국민일보','서울신문','세계일보','문화일보',
+  '매일경제','한국경제','서울경제','머니투데이','헤럴드경제','아시아경제','파이낸셜뉴스','이데일리','디지털타임스','전자신문',
+  '내일신문','헬스경향','동아경제','매일신문','부산일보','코리아헤럴드','코리아타임스'];
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+const S = { pages: [], cur: -1, zoom: 0, scraps: [], logos: {}, sel: [], date: '' };
+let uid = Date.now();
+
+// ───────── 저장(브라우저 안 IndexedDB) : 담은 스크랩·날짜·로고만. 지면 원본은 저장하지 않음 ─────────
+const DB = (() => {
+  let dbp;
+  const open = () => dbp ||= new Promise((ok, no) => {
+    try {
+      const r = indexedDB.open('press-scrap', 1);
+      r.onupgradeneeded = () => r.result.createObjectStore('kv');
+      r.onsuccess = () => ok(r.result); r.onerror = () => no(r.error);
+    } catch (e) { no(e); }
+  });
+  const tx = async (mode, fn) => { const db = await open(); return new Promise((ok, no) => {
+    const t = db.transaction('kv', mode); const st = t.objectStore('kv'); const r = fn(st);
+    t.oncomplete = () => ok(r && r.result); t.onerror = () => no(t.error); }); };
+  return {
+    get: k => tx('readonly', st => st.get(k)).catch(() => undefined),
+    set: (k, v) => tx('readwrite', st => st.put(v, k)).catch(() => {}),
+  };
+})();
+let saveT;
+function save() { clearTimeout(saveT); saveT = setTimeout(() => {
+  DB.set('scraps', S.scraps); DB.set('date', S.date); DB.set('logos', S.logos); }, 300); }
+
+// ───────── 불러오기 ─────────
+function guessMeta(path) {
+  const name = path.split('/').pop().replace(/\.[^.]+$/, '');
+  const flat = path.replace(/\s/g, '');
+  const media = MEDIA.find(m => flat.includes(m)) || '';
+  let page = (name.match(/(?:^|[^A-Za-z0-9])([A-Z]\d{1,2})(?![0-9])/) || [])[1] || '';
+  if (!page) page = (name.match(/(\d{1,2})\s*면/) || [])[1] || '';
+  const sec = (name.match(/면[_\s-]*([가-힣·&]{2,8})/) || [])[1] || '';
+  return { media, page, section: sec };
+}
+const natural = (a, b) => a.localeCompare(b, 'ko', { numeric: true });
+
+async function addFiles(list) {
+  const files = [...list].filter(f => /^image\//.test(f.type) || /\.(jpe?g|png|webp|gif|bmp)$/i.test(f.name));
+  const skipped = [...list].filter(f => /\.(tiff?)$/i.test(f.name)).length;
+  if (!files.length) { toast(skipped ? 'TIF 파일은 브라우저에서 열 수 없습니다. 스크랩마스터에서 JPG/PNG로 저장해 주세요.' : '이미지 파일이 없습니다.'); return; }
+  files.sort((a, b) => natural(a._path || a.webkitRelativePath || a.name, b._path || b.webkitRelativePath || b.name));
+  const first = S.pages.length;
+  for (const f of files) {
+    const path = f._path || f.webkitRelativePath || f.name;
+    if (S.pages.some(p => p.path === path && p.size === f.size)) continue;
+    S.pages.push({ id: 'p' + (++uid), path, size: f.size, name: f.name, url: URL.createObjectURL(f), ...guessMeta(path) });
+  }
+  // 같은 폴더 안에서 매체를 못 읽은 면은 폴더 이름의 매체를 따름
+  renderPages();
+  if (S.cur < 0 || first === 0) show(first < S.pages.length ? first : 0);
+  toast(`지면 ${S.pages.length - first}면을 불러왔습니다.` + (skipped ? ` (TIF ${skipped}개는 열 수 없어 건너뜀)` : ''));
+}
+async function walk(entry, prefix = '') {
+  if (entry.isFile) return new Promise(ok => entry.file(f => { f._path = prefix + f.name; ok([f]); }, () => ok([])));
+  if (!entry.isDirectory) return [];
+  const rd = entry.createReader(); let all = [], batch;
+  do { batch = await new Promise(ok => rd.readEntries(ok, () => ok([]))); all = all.concat(batch); } while (batch.length);
+  const out = [];
+  for (const e of all) out.push(...await walk(e, prefix + entry.name + '/'));
+  return out;
+}
+inFiles.onchange = e => { addFiles(e.target.files); e.target.value = ''; };
+inFolder.onchange = e => { addFiles(e.target.files); e.target.value = ''; };
+btnFiles.onclick = () => inFiles.click();
+btnFolder.onclick = () => inFolder.click();
+addEventListener('dragover', e => { e.preventDefault(); document.body.classList.add('dragging'); });
+addEventListener('dragleave', e => { if (e.target === document.documentElement || !e.relatedTarget) document.body.classList.remove('dragging'); });
+addEventListener('drop', async e => {
+  e.preventDefault(); document.body.classList.remove('dragging');
+  const items = [...(e.dataTransfer.items || [])].map(i => i.webkitGetAsEntry && i.webkitGetAsEntry()).filter(Boolean);
+  if (items.length) { let fs = []; for (const it of items) fs = fs.concat(await walk(it)); addFiles(fs); }
+  else addFiles(e.dataTransfer.files);
+});
+
+// ───────── 지면 목록 ─────────
+function pageLabel(p) { return [p.media || '매체?', p.page ? p.page + '면' : '', p.section].filter(Boolean).join(' '); }
+function renderPages() {
+  const nav = $('#pages');
+  if (!S.pages.length) { nav.innerHTML = '<div class="none" style="padding:14px 12px">불러온 지면이 없습니다.</div>'; return; }
+  const groups = {};
+  S.pages.forEach((p, i) => (groups[p.media || '매체 미지정'] ||= []).push(i));
+  nav.innerHTML = Object.entries(groups).map(([g, idx]) => `<div class="grp">${esc(g)} · ${idx.length}면</div>` + idx.map(i => {
+    const p = S.pages[i]; const n = S.scraps.filter(s => s.pieces.some(c => c.pageId === p.id)).length;
+    return `<div class="thumb ${i === S.cur ? 'on' : ''}" data-i="${i}"><img loading="lazy" src="${p.url}" alt="">
+      <div class="t"><b>${esc(p.page ? p.page + '면' : p.name)}</b><span>${esc(p.section)}</span>${n ? `<div class="n">✔ ${n}건 담음</div>` : ''}</div></div>`;
+  }).join('')).join('');
+  nav.querySelectorAll('.thumb').forEach(el => el.onclick = () => show(+el.dataset.i));
+  nav.querySelector('.thumb.on')?.scrollIntoView({ block: 'nearest' });
+  $('#mediaList').innerHTML = MEDIA.map(m => `<option value="${m}">`).join('');
+}
+
+// ───────── 지면 보기 + 드래그 오리기 ─────────
+const img = $('#pgImg'), cv = $('#canvas'), stage = $('#stage');
+function show(i) {
+  if (i < 0 || i >= S.pages.length) return;
+  S.cur = i; S.sel = []; closeAdd();
+  const p = S.pages[i];
+  $('#empty').hidden = true; cv.hidden = false; $('#pagebar').hidden = false;
+  $('#pgTitle').textContent = `${i + 1} / ${S.pages.length}  ${p.name}`;
+  pgMedia.value = p.media; pgPage.value = p.page; pgSection.value = p.section;
+  img.onload = () => { p.w = img.naturalWidth; p.h = img.naturalHeight; layout(); stage.scrollTop = 0; };
+  img.src = p.url;
+  if (img.complete && img.naturalWidth) img.onload();
+  renderPages();
+}
+function scale() { const p = S.pages[S.cur]; if (!p || !p.w) return 1;
+  const fit = (stage.clientWidth - 32) / p.w; return S.zoom ? fit * S.zoom : fit; }
+function layout() {
+  const p = S.pages[S.cur]; if (!p || !p.w) return;
+  const k = scale(); cv.style.width = p.w * k + 'px'; cv.style.height = p.h * k + 'px';
+  drawRects();
+}
+addEventListener('resize', layout);
+zIn.onclick = () => { S.zoom = (S.zoom || 1) * 1.25; layout(); };
+zOut.onclick = () => { S.zoom = Math.max(.3, (S.zoom || 1) / 1.25); layout(); };
+zFit.onclick = () => { S.zoom = 0; layout(); };
+for (const [el, key] of [[pgMedia, 'media'], [pgPage, 'page'], [pgSection, 'section']])
+  el.oninput = () => { const p = S.pages[S.cur]; if (!p) return; p[key] = el.value.trim();
+    if (key === 'media') applyMediaToSiblings(p); renderPagesSoon(); };
+let rpT; function renderPagesSoon() { clearTimeout(rpT); rpT = setTimeout(renderPages, 400); }
+function applyMediaToSiblings(p) {   // 같은 폴더의 매체 미지정 면에도 같은 매체를 채움
+  const dir = p.path.includes('/') ? p.path.slice(0, p.path.lastIndexOf('/')) : null;
+  if (dir === null) return;
+  S.pages.forEach(q => { if (q !== p && !q._mediaTyped && q.path.startsWith(dir + '/') && q.path.lastIndexOf('/') === dir.length) q.media = p.media; });
+  p._mediaTyped = true;
+}
+
+function drawRects() {
+  cv.querySelectorAll('.rect').forEach(r => r.remove());
+  const p = S.pages[S.cur]; if (!p) return; const k = scale();
+  // 이미 담은 조각 (초록 점선)
+  S.scraps.forEach(s => s.pieces.forEach((c, j) => { if (c.pageId !== p.id) return;
+    const d = mkRect(c.r, k, 'rect saved'); d.innerHTML = `<span class="no">${esc(short(s.title, 14))}${s.pieces.length > 1 ? ' ' + (j + 1) : ''}</span>`; cv.appendChild(d); }));
+  // 지금 고른 조각 (주황)
+  S.sel.forEach((r, j) => { const d = mkRect(r, k, 'rect');
+    d.innerHTML = `<span class="no">${j + 1}</span><button class="x" title="이 조각 빼기">×</button>`;
+    d.querySelector('.x').onmousedown = e => e.stopPropagation();
+    d.querySelector('.x').onclick = e => { e.stopPropagation(); S.sel.splice(j, 1); drawRects(); S.sel.length ? openAdd() : closeAdd(); };
+    cv.appendChild(d); });
+}
+function mkRect(r, k, cls) { const d = document.createElement('div'); d.className = cls;
+  Object.assign(d.style, { left: r.x * k + 'px', top: r.y * k + 'px', width: r.w * k + 'px', height: r.h * k + 'px' }); return d; }
+const short = (s, n) => (s || '(제목 없음)').length > n ? s.slice(0, n) + '…' : (s || '(제목 없음)');
+
+let drag = null;
+cv.addEventListener('mousedown', e => {
+  if (e.button !== 0) return; const p = S.pages[S.cur]; if (!p) return;
+  const b = cv.getBoundingClientRect(), k = scale();
+  drag = { x0: (e.clientX - b.left) / k, y0: (e.clientY - b.top) / k, add: e.shiftKey || (S.sel.length > 0 && $('#addbox').classList.contains('on') && e.shiftKey) };
+  drag.el = mkRect({ x: drag.x0, y: drag.y0, w: 0, h: 0 }, k, 'rect drawing'); cv.appendChild(drag.el);
+  e.preventDefault();
+});
+addEventListener('mousemove', e => {
+  if (!drag) return; const b = cv.getBoundingClientRect(), k = scale(), p = S.pages[S.cur];
+  const x = Math.max(0, Math.min(p.w, (e.clientX - b.left) / k)), y = Math.max(0, Math.min(p.h, (e.clientY - b.top) / k));
+  drag.r = { x: Math.min(x, drag.x0), y: Math.min(y, drag.y0), w: Math.abs(x - drag.x0), h: Math.abs(y - drag.y0) };
+  Object.assign(drag.el.style, { left: drag.r.x * k + 'px', top: drag.r.y * k + 'px', width: drag.r.w * k + 'px', height: drag.r.h * k + 'px' });
+  // 화면 가장자리에서 자동 스크롤
+  const sb = stage.getBoundingClientRect();
+  if (e.clientY > sb.bottom - 30) stage.scrollTop += 18; else if (e.clientY < sb.top + 30) stage.scrollTop -= 18;
+});
+addEventListener('mouseup', () => {
+  if (!drag) return; const d = drag; drag = null; d.el.remove();
+  if (!d.r || d.r.w < 12 || d.r.h < 12) return;
+  if (!d.add) S.sel = [];
+  S.sel.push(d.r); drawRects(); openAdd();
+});
+
+// ───────── 담기 ─────────
+const catOpts = CATS.map(c => `<option>${c}</option>`).join('');
+aCat.innerHTML = catOpts; eCat.innerHTML = catOpts;
+function openAdd() {
+  const box = $('#addbox'); const was = box.classList.contains('on'); box.classList.add('on');
+  aHint.innerHTML = `조각 ${S.sel.length}개 선택됨 · <kbd>Shift</kbd>+드래그로 조각 추가 (단이 꺾인 기사) · 다른 곳을 그냥 드래그하면 새로 고르기`;
+  if (!was) { aCat.value = aCat.value || CATS[0]; setTimeout(() => aTitle.focus(), 0); }
+}
+function closeAdd() { $('#addbox').classList.remove('on'); }
+aCancel.onclick = () => { S.sel = []; drawRects(); closeAdd(); };
+aTitle.onkeydown = aMemo.onkeydown = e => { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); addScrap(); } };
+aAdd.onclick = addScrap;
+
+function crop(r) {
+  const k = Math.min(1, 2400 / r.w);   // 너무 큰 조각은 줄여서 PDF 용량을 관리
+  const c = document.createElement('canvas'); c.width = Math.round(r.w * k); c.height = Math.round(r.h * k);
+  c.getContext('2d').drawImage(img, r.x, r.y, r.w, r.h, 0, 0, c.width, c.height);
+  return { src: c.toDataURL('image/jpeg', 0.9), w: c.width, h: c.height };
+}
+function addScrap() {
+  const p = S.pages[S.cur]; if (!p || !S.sel.length) return;
+  const s = { id: 's' + (++uid), cat: aCat.value, title: aTitle.value.trim(), memo: aMemo.value.trim(),
+    media: p.media, page: p.page, section: p.section, layout: 'v',
+    pieces: S.sel.map(r => ({ pageId: p.id, path: p.path, r, ...crop(r) })) };
+  S.scraps.push(s); S.sel = []; aTitle.value = ''; aMemo.value = '';
+  closeAdd(); drawRects(); renderList(); renderPages(); save();
+  toast(`「${short(s.title, 20)}」을(를) ${s.cat}에 담았습니다.`);
+  if (!p.media || !p.page) toast('이 지면의 매체·면이 비어 있습니다. 위쪽 칸에 적어 주세요.');
+}
+
+// ───────── 스크랩 목록 ─────────
+function renderList() {
+  const n = S.scraps.length;
+  $('#count').textContent = n ? `담은 기사 ${n}건` : '';
+  btnPdf.disabled = !n;
+  $('#list').innerHTML = CATS.map(c => {
+    const items = S.scraps.filter(s => s.cat === c);
+    return `<div class="cat">${c} 관련 <small>${items.length}건</small></div>` + (items.length ? items.map(s => `
+      <div class="item" data-id="${s.id}">
+        <img src="${s.pieces[0].src}" alt="" data-act="edit">
+        <div class="body" data-act="edit">
+          <div class="ti">${esc(s.title || '(제목 없음 — 눌러서 입력)')}</div>
+          <div class="me">${esc(src(s))}${s.pieces.length > 1 ? ` · 조각 ${s.pieces.length}` : ''}</div>
+          ${s.memo ? `<div class="memo">: ${esc(s.memo.replace(/^:\s*/, ''))}</div>` : ''}
+        </div>
+        <div class="ops"><button class="ghost" data-act="up" title="위로">▲</button><button class="ghost" data-act="down" title="아래로">▼</button></div>
+      </div>`).join('') : '<div class="none">아직 없음</div>');
+  }).join('');
+  $('#list').querySelectorAll('[data-act]').forEach(el => el.onclick = () => {
+    const id = el.closest('.item').dataset.id, act = el.dataset.act;
+    if (act === 'edit') return edit(id);
+    move(id, act === 'up' ? -1 : 1);
+  });
+}
+function src(s) { return `${s.media || '매체?'} ${s.page ? s.page + '면' : ''}${s.section ? ' ' + s.section : ''}`.trim(); }
+function move(id, d) {
+  const s = S.scraps.find(x => x.id === id); const same = S.scraps.filter(x => x.cat === s.cat);
+  const j = same.indexOf(s) + d; if (j < 0 || j >= same.length) return;
+  const a = S.scraps.indexOf(s), b = S.scraps.indexOf(same[j]); [S.scraps[a], S.scraps[b]] = [S.scraps[b], S.scraps[a]];
+  renderList(); save();
+}
+function edit(id) {
+  const s = S.scraps.find(x => x.id === id); if (!s) return;
+  eCat.value = s.cat; eTitle.value = s.title; eMemo.value = s.memo; eMedia.value = s.media; ePage.value = s.page; eSection.value = s.section; eLayout.value = s.layout;
+  $('#ePv').innerHTML = s.pieces.map(c => `<img src="${c.src}" alt="">`).join('');
+  eGoto.hidden = !S.pages.some(p => p.id === s.pieces[0].pageId);
+  dlg.returnValue = ''; dlg.showModal();
+  dlg.onclose = () => {
+    const v = dlg.returnValue;
+    if (v === 'ok') Object.assign(s, { cat: eCat.value, title: eTitle.value.trim(), memo: eMemo.value.trim(), media: eMedia.value.trim(), page: ePage.value.trim(), section: eSection.value.trim(), layout: eLayout.value });
+    else if (v === 'del') { if (!confirm('이 기사를 스크랩에서 뺄까요?')) return; S.scraps.splice(S.scraps.indexOf(s), 1); }
+    else if (v === 'goto') { const i = S.pages.findIndex(p => p.id === s.pieces[0].pageId); if (i >= 0) show(i); return; }
+    else return;
+    renderList(); renderPages(); drawRects(); save();
+  };
+}
+btnClear.onclick = () => { if (S.scraps.length && confirm(`담은 기사 ${S.scraps.length}건을 모두 비울까요?`)) { S.scraps = []; renderList(); renderPages(); drawRects(); save(); } };
+
+// ───────── 로고 등록 (파일 이름에 매체명이 들어 있으면 그 매체 로고로) ─────────
+btnLogos.onclick = () => inLogos.click();
+inLogos.onchange = async e => {
+  let n = 0;
+  for (const f of e.target.files) {
+    const m = MEDIA.find(x => f.name.includes(x)) || prompt(`「${f.name}」은 어느 매체 로고인가요?`, '');
+    if (!m) continue;
+    S.logos[m] = await new Promise(ok => { const r = new FileReader(); r.onload = () => ok(r.result); r.readAsDataURL(f); }); n++;
+  }
+  e.target.value = ''; save(); toast(`로고 ${n}개를 등록했습니다. 등록된 매체: ${Object.keys(S.logos).join(', ') || '없음'}`);
+};
+
+// ───────── 날짜 ─────────
+const DOW = '일월화수목금토';
+function d8(v) { const [y, m, d] = v.split('-').map(Number); const dt = new Date(y, m - 1, d); return { y, m, d, w: DOW[dt.getDay()] }; }
+date.onchange = () => { S.date = date.value; save(); };
+
+// ───────── 목차·PDF ─────────
+function tocText() {
+  const { m, d, w } = d8(S.date || date.value);
+  const out = [`${m}월 ${d}일(${w}) 언론 스크랩`, ''];
+  let n = 0;
+  for (const c of CATS) {
+    const items = S.scraps.filter(s => s.cat === c); if (!items.length) continue;
+    out.push(`${++n}. ${c} 관련`);
+    for (const s of items) {
+      out.push(`- ${s.title || '(제목)'} (${s.media || '매체'} ${s.section ? s.section + '면' : (s.page ? s.page + '면' : '')})`.replace(' )', ')'));
+      if (s.memo) out.push(`  : ${s.memo.replace(/^:\s*/, '')}`);
+    }
+    out.push('');
+  }
+  return out.join('\n');
+}
+btnToc.onclick = async () => {
+  try { await navigator.clipboard.writeText(tocText()); toast('목차를 복사했습니다. 한글·워드에 붙여 넣으세요.'); }
+  catch { prompt('아래 내용을 복사하세요', tocText()); }
+};
+btnPdf.onclick = () => {
+  const missing = S.scraps.filter(s => !s.title || !s.media);
+  if (missing.length && !confirm(`제목이나 매체가 빈 기사가 ${missing.length}건 있습니다. 그대로 만들까요?`)) return;
+  const { y, m, d, w } = d8(S.date || date.value);
+  let n = 0, cover = `<h1>${m}월 ${d}일(${w}) 언론 스크랩</h1>`;
+  for (const c of CATS) {
+    const items = S.scraps.filter(s => s.cat === c); if (!items.length) continue;
+    cover += `<div class="c">${++n}. ${c} 관련</div>` + items.map(s =>
+      `<div class="i">- ${esc(s.title || '(제목)')} (${esc(s.media || '매체')} ${esc(s.section ? s.section + '면' : (s.page ? s.page + '면' : ''))})</div>` +
+      (s.memo ? `<div class="m">: ${esc(s.memo.replace(/^:\s*/, ''))}</div>` : '')).join('');
+  }
+  const ordered = CATS.flatMap(c => S.scraps.filter(s => s.cat === c));
+  const arts = ordered.map(s => {
+    const logo = S.logos[s.media] ? `<img src="${S.logos[s.media]}" alt="${esc(s.media)}">` : esc(s.media || '');
+    const pageTxt = s.page ? (/^\d+$/.test(s.page) ? s.page.padStart(3, '0') : s.page) + '면' : '';
+    return `<section class="art"><div class="h"><span class="logo">${logo}</span>
+      <span class="when">${y}년 ${m}월 ${d}일 ${w}요일 ${esc(pageTxt)} ${esc(s.section)}</span></div>
+      <div class="pcs ${s.pieces.length > 1 ? s.layout : 'v'}">${s.pieces.map(c => `<img src="${c.src}" alt="">`).join('')}</div></section>`;
+  }).join('');
+  $('#print').innerHTML = `<div class="cover">${cover}</div>${arts}`;
+  const old = document.title; document.title = `${m}월 ${d}일 언론 스크랩`;
+  const imgs = [...$('#print').querySelectorAll('img')];
+  Promise.all(imgs.map(i => i.decode ? i.decode().catch(() => {}) : 0)).then(() => {
+    toast('인쇄 창에서 대상(프린터)을 「PDF로 저장」으로 고르세요.');
+    setTimeout(() => { print(); document.title = old; }, 150);
+  });
+};
+
+// ───────── 키보드 ─────────
+addEventListener('keydown', e => {
+  if (dlg.open) return;
+  const typing = /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName);
+  if (e.key === 'Escape') { S.sel = []; drawRects(); closeAdd(); document.activeElement.blur(); return; }
+  if (typing) return;
+  if (e.key === 'ArrowRight' || e.key === 'PageDown') { show(S.cur + 1); e.preventDefault(); }
+  if (e.key === 'ArrowLeft' || e.key === 'PageUp') { show(S.cur - 1); e.preventDefault(); }
+});
+addEventListener('beforeunload', e => { if (S.scraps.length) { save(); } });
+
+let tT; function toast(m) { const t = $('#toast'); t.textContent = m; t.classList.add('on'); clearTimeout(tT); tT = setTimeout(() => t.classList.remove('on'), 3200); }
+
+// ───────── 시작 ─────────
+(async () => {
+  const today = new Date(); const iso = new Date(today - today.getTimezoneOffset() * 6e4).toISOString().slice(0, 10);
+  S.scraps = (await DB.get('scraps')) || [];
+  S.logos = (await DB.get('logos')) || {};
+  S.date = (await DB.get('date')) || iso;
+  date.value = S.date;
+  renderList(); renderPages();
+  if (S.scraps.length) toast(`이전에 담아 둔 기사 ${S.scraps.length}건을 불러왔습니다. (지면은 다시 불러와야 합니다)`);
+})();
+</script>
+</body>
+</html>
