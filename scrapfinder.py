@@ -551,6 +551,11 @@ def run(folder, log=print, progress=None, stop=None):
 
 
 def main():
+    for stream in (sys.stdout, sys.stderr):      # 한글을 못 찍는 명령창에서도 멈추지 않게
+        try:
+            stream.reconfigure(errors='replace')
+        except Exception:
+            pass
     if len(sys.argv) >= 2:
         folder = sys.argv[1]
     else:

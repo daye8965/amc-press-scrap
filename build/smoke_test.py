@@ -7,6 +7,8 @@ import tempfile
 
 from PIL import Image, ImageDraw, ImageFont
 
+for _s in (sys.stdout, sys.stderr):
+    _s.reconfigure(encoding='utf-8', errors='replace')
 app_dir, font_path = sys.argv[1], sys.argv[2]
 sys.path.insert(0, app_dir)
 import scrapfinder as sf  # noqa: E402

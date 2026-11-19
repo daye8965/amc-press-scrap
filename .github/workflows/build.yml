@@ -9,6 +9,10 @@ on:
 permissions:
   contents: write
 
+env:
+  PYTHONUTF8: '1'          # 영문 Windows 빌드 서버에서도 한글 출력이 깨지지 않게
+  PYTHONIOENCODING: utf-8
+
 jobs:
   build:
     runs-on: windows-latest
