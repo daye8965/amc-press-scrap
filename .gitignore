@@ -1,0 +1,17 @@
+# 파이썬 캐시
+__pycache__/
+
+# 결과 폴더와 지면 이미지 — 저작권 때문에 절대 올리지 않음
+_스크랩후보/
+*.jpg
+*.jpeg
+*.png
+*.webp
+*.tif
+*.tiff
+*.bmp
+*.pdf
+
+Thumbs.db
+.DS_Store
+desktop.ini
