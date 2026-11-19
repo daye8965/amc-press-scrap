@@ -1,0 +1,67 @@
+name: Windows 프로그램 빌드
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: 파이썬 패키지 설치
+        run: pip install pyinstaller pillow
+
+      - name: Tesseract OCR 설치
+        run: choco install tesseract -y --no-progress
+
+      - name: exe 만들기
+        shell: pwsh
+        run: |
+          pyinstaller --noconfirm --windowed --name ScrapFinder app.py
+          $app = "dist\ScrapFinder"
+          Copy-Item "키워드.txt" $app
+          Copy-Item "build\사용법.txt" $app
+
+          # OCR 엔진을 프로그램 폴더 안에 넣기 (한국어 데이터만 남김)
+          $tess = "C:\Program Files\Tesseract-OCR"
+          if (-not (Test-Path "$tess\tesseract.exe")) { throw "Tesseract 설치 위치를 찾지 못함" }
+          Copy-Item $tess "$app\tesseract" -Recurse
+          Get-ChildItem "$app\tesseract\tessdata\*.traineddata" | Where-Object { $_.Name -ne 'osd.traineddata' } | Remove-Item
+          Remove-Item "$app\tesseract\doc", "$app\tesseract\tessdata\script" -Recurse -ErrorAction SilentlyContinue
+          Get-ChildItem "$app\tesseract" -Filter "*training*" | Remove-Item -Recurse -ErrorAction SilentlyContinue
+          Invoke-WebRequest "https://github.com/tesseract-ocr/tessdata_fast/raw/main/kor.traineddata" -OutFile "$app\tesseract\tessdata\kor.traineddata"
+
+      - name: 묶인 OCR 엔진으로 시험
+        shell: pwsh
+        run: |
+          Copy-Item scrapfinder.py dist\ScrapFinder\
+          python build\smoke_test.py dist\ScrapFinder C:\Windows\Fonts\malgun.ttf
+          Remove-Item dist\ScrapFinder\scrapfinder.py
+
+      - name: 압축
+        shell: pwsh
+        run: |
+          Rename-Item dist\ScrapFinder "스크랩후보찾기"
+          Compress-Archive -Path "dist\스크랩후보찾기" -DestinationPath "스크랩후보찾기.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: 스크랩후보찾기
+          path: 스크랩후보찾기.zip
+
+      - name: 릴리스에 올리기 (v로 시작하는 태그일 때)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: 스크랩후보찾기.zip

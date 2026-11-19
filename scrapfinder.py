@@ -26,9 +26,12 @@ try:
 except ImportError:
     sys.exit('Pillow가 없습니다. 명령창에서  pip install pillow  를 실행한 뒤 다시 시도하세요.')
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+# exe로 묶였을 때는 exe가 있는 폴더, 아니면 이 파일이 있는 폴더 (키워드.txt·tesseract 폴더를 여기서 찾음)
+HERE = os.path.dirname(sys.executable if getattr(sys, 'frozen', False) else os.path.abspath(__file__))
+NO_WINDOW = 0x08000000 if os.name == 'nt' else 0   # Windows에서 OCR 돌릴 때 검은 창이 깜빡이지 않게
 IMG_EXT = ('.jpg', '.jpeg', '.png', '.tif', '.tiff', '.bmp', '.webp')
 MIN_OCR_WIDTH = 2600          # 이보다 작은 지면은 확대해서 읽음 (작은 글씨 오인식 방지)
+HEADLINE_OCR_WIDTH = 900      # 큰 제목을 잡기 위해 줄여서 한 번 더 읽는 폭
 HEADER_BAND = 0.06            # 지면 위쪽 6%를 머리글(면·날짜·섹션)로 봄
 
 MEDIA = ['조선일보', '중앙일보', '동아일보', '한국일보', '경향신문', '한겨레', '국민일보', '서울신문',
@@ -86,7 +89,15 @@ def load_keywords(path):
 
 
 # ───────────────────────── OCR ─────────────────────────
+class SetupError(Exception):
+    pass
+
+
 def find_tesseract():
+    bundled = os.path.join(HERE, 'tesseract', 'tesseract.exe')
+    if os.path.isfile(bundled):                  # 프로그램에 같이 들어 있는 OCR 엔진
+        os.environ['TESSDATA_PREFIX'] = os.path.join(HERE, 'tesseract', 'tessdata')
+        return bundled
     cands = [shutil.which('tesseract'),
              r'C:\Program Files\Tesseract-OCR\tesseract.exe',
              r'C:\Program Files (x86)\Tesseract-OCR\tesseract.exe',
@@ -94,27 +105,21 @@ def find_tesseract():
     for c in cands:
         if c and os.path.isfile(c):
             return c
-    sys.exit('Tesseract OCR을 찾지 못했습니다. README의 「설치」를 따라 설치해 주세요.')
+    raise SetupError('OCR 엔진(Tesseract)을 찾지 못했습니다. 프로그램 폴더 안의 tesseract 폴더가 지워지지 않았는지 확인해 주세요.')
 
 
-def ocr_page(tess, src, work):
-    """한 면을 OCR 해서 단어 목록(좌표는 원본 이미지 기준)과 원본 크기를 돌려줌. 결과는 캐시."""
-    base = os.path.join(work, os.path.splitext(os.path.basename(src))[0])
+def _tesseract_tsv(tess, im, scale, base):
+    """im을 scale배로 바꿔 OCR → base.tsv 저장. 이미 있으면 다시 읽지 않음(캐시)."""
     tsv = base + '.tsv'
-    im = Image.open(src)
-    W, H = im.size
-    scale = 1.0
-    if W < MIN_OCR_WIDTH:
-        scale = MIN_OCR_WIDTH / W
-    if not (os.path.exists(tsv) and os.path.getmtime(tsv) > os.path.getmtime(src)):
+    if not os.path.exists(tsv):
         tmp = base + '_ocr.png'
         g = im.convert('L')
         if scale != 1.0:
-            g = g.resize((round(W * scale), round(H * scale)), Image.LANCZOS)
+            g = g.resize((max(1, round(im.width * scale)), max(1, round(im.height * scale))), Image.LANCZOS)
         g.save(tmp)
         env = dict(os.environ, OMP_THREAD_LIMIT='1')   # 여러 면을 동시에 돌릴 때 CPU 경합 방지
         r = subprocess.run([tess, tmp, base, '-l', 'kor', '--psm', '3', 'tsv'],
-                           capture_output=True, env=env)
+                           capture_output=True, env=env, creationflags=NO_WINDOW)
         os.remove(tmp)
         if r.returncode != 0:
             raise RuntimeError(r.stderr.decode('utf-8', 'replace')[-500:])
@@ -129,7 +134,28 @@ def ocr_page(tess, src, work):
                 'w': int(row['width']) / scale, 'h': int(row['height']) / scale,
                 'line': (row['block_num'], row['par_num'], row['line_num']),
             })
-    return words, (W, H)
+    return words
+
+
+def ocr_page(tess, src, work):
+    """한 면을 두 번 읽음.
+    ① 본문용: 작은 지면은 확대해서 읽음 (작은 글씨 오인식 방지)
+    ② 제목용: 가로 900픽셀로 줄여서 읽음 (Tesseract는 아주 큰 글씨를 건너뛰는 경향이 있음)
+    좌표는 모두 원본 이미지 기준으로 돌려줌."""
+    key = os.path.splitext(os.path.relpath(src, os.path.dirname(work)))[0]
+    base = os.path.join(work, re.sub(r'[\\/:]', '__', key))
+    stamp = base + '.ok'
+    im = Image.open(src)
+    im.load()
+    if os.path.exists(stamp) and os.path.getmtime(stamp) < os.path.getmtime(src):
+        for ext in ('.tsv', '.big.tsv', '.ok'):
+            if os.path.exists(base + ext):
+                os.remove(base + ext)
+    W, H = im.size
+    words = _tesseract_tsv(tess, im, max(1.0, MIN_OCR_WIDTH / W), base)
+    big = _tesseract_tsv(tess, im, min(1.0, HEADLINE_OCR_WIDTH / W), base + '.big')
+    open(stamp, 'w').close()
+    return words, big, (W, H)
 
 
 def tidy(text):
@@ -208,9 +234,32 @@ def headline_for(hit_line, heads):
     return best
 
 
+def head_quality(l):
+    """제목 후보 줄의 '한글다움' 점수. 사진·표를 잘못 읽은 잡음(숫자·기호 투성이)은 0."""
+    t = re.sub(r'\s', '', l['text'])
+    han = len(re.findall(r'[가-힣]', t))
+    if han < 4 or han / max(len(t), 1) < 0.6:
+        return 0
+    return han / len(t) * min(han, 20)
+
+
+def overlap(a, b):
+    ix = max(0, min(a['x1'], b['x1']) - max(a['x0'], b['x0']))
+    iy = max(0, min(a['y1'], b['y1']) - max(a['y0'], b['y0']))
+    small = min((a['x1'] - a['x0']) * (a['y1'] - a['y0']), (b['x1'] - b['x0']) * (b['y1'] - b['y0'])) or 1
+    return ix * iy / small
+
+
 def merge_heads(heads):
-    """여러 줄로 나뉜 큰 제목을 하나로 묶음."""
-    heads = sorted(heads, key=lambda l: (l['y0'], l['x0']))
+    """잡음을 거르고, 두 번 읽은 같은 제목은 더 잘 읽힌 쪽만 남긴 뒤, 여러 줄로 나뉜 제목을 하나로 묶음."""
+    picked = []
+    for h in sorted(heads, key=head_quality, reverse=True):
+        if head_quality(h) == 0:
+            continue
+        if any(overlap(h, p) > 0.5 for p in picked):
+            continue
+        picked.append(h)
+    heads = sorted(picked, key=lambda l: (l['y0'], l['x0']))
     out = []
     for h in heads:
         if out:
@@ -224,6 +273,31 @@ def merge_heads(heads):
     return out
 
 
+def _junk(tok):
+    """사진·숫자를 잘못 읽은 듯한 토막인지. 2.2%→3.9%, KDI, 10만 같은 정상 표기는 제외."""
+    if re.fullmatch(r'[\d.,%→~\-·]+[%만억원명건개곳]?|[A-Za-z]+[,.]?|["\'“”‘’?!…,.·\-]+', tok):
+        return False
+    han = len(re.findall(r'[가-힣]', tok))
+    return han / len(tok) < 0.5
+
+
+def clean_title(text):
+    """제목 뒤에 붙은 잡음(사진·숫자를 잘못 읽은 글자)을 잘라 냄."""
+    toks = text.split()
+    for i in range(len(toks)):                   # 뒤쪽이 잡음 투성이면 그 앞에서 자름
+        rest = toks[i:]
+        joined = ''.join(rest)
+        han = len(re.findall(r'[가-힣]', joined))
+        odd = sum(_junk(t) or bool(re.search(r'\d', t)) for t in rest)
+        if odd >= 3 and han / max(len(joined), 1) < 0.6:
+            toks = toks[:i]
+            break
+    while toks and _junk(toks[-1]):
+        toks.pop()
+    t = re.sub(r'[\s^。、ㆍ|~_]+$', '', ' '.join(toks)).strip()
+    return t or text.strip()
+
+
 DOCTOR_RE = re.compile(r'([가-힣]{1,10}(?:과|센터|교실|학교실))([가-힣]{2,4})(교수|원장|센터장|전문의)')
 
 
@@ -235,13 +309,14 @@ def doctor_note(flat_after):
 
 
 # ───────────────────────── 한 면 분석 ─────────────────────────
-def analyze(path, words, size, cats):
+def analyze(path, words, size, cats, big=()):
     lines = build_lines(words)
     info = parse_header(lines, size, path)
     W, H = size
     body = [l for l in lines if l['y0'] > H * HEADER_BAND]
     mh = median([l['h'] for l in body]) if body else 10
-    heads = merge_heads([l for l in body if l['h'] >= mh * 1.7 and len(l['flat']) >= 4])
+    big_lines = [l for l in build_lines(list(big)) if l['y0'] > H * HEADER_BAND]
+    heads = merge_heads([l for l in big_lines + body if l['h'] >= mh * 1.7])
 
     # 줄 경계를 넘는 키워드도 잡히도록, 단(열)별로 이어 붙인 문자열 + 글자→줄 대응표
     # OCR이 알려 준 읽기 순서(블록→문단→줄)대로 이어야 단을 넘어가는 문장이 섞이지 않음
@@ -283,7 +358,7 @@ def analyze(path, words, size, cats):
                 break
         if not cat_hit:
             continue
-        title = re.sub(r'\s+', ' ', a['head']['text']).strip() if a['head'] else '(제목 추정 실패)'
+        title = clean_title(a['head']['text']) if a['head'] else '(제목 추정 실패)'
         results.append({'cat': cat_hit, 'title': title, 'hits': {c: dict(k) for c, k in a['hits'].items()},
                         'boxes': a['boxes'], 'snips': a['snips'][:3], 'doctors': a['doctors'],
                         'head_box': (a['head']['x0'], a['head']['y0'], a['head']['x1'], a['head']['y1']) if a['head'] else None})
@@ -415,50 +490,75 @@ figure img{{width:100%;max-width:1100px;border:1px solid var(--line)}}
     return os.path.join(outdir, '결과.html')
 
 
-def main():
-    if len(sys.argv) >= 2:
-        folder = sys.argv[1]
-    else:
-        folder = input('지면 이미지 폴더를 이 창에 끌어다 놓거나 경로를 붙여넣고 Enter: ')
-    folder = os.path.abspath(folder.strip().strip('"'))
-    if not os.path.isdir(folder):
-        sys.exit(f'폴더가 아닙니다: {folder}')
-    srcs = sorted(os.path.join(dp, f) for dp, _, fs in os.walk(folder) for f in fs
+def list_images(folder):
+    return sorted(os.path.join(dp, f) for dp, _, fs in os.walk(folder) for f in fs
                   if f.lower().endswith(IMG_EXT) and '_스크랩후보' not in dp)
+
+
+def run(folder, log=print, progress=None, stop=None):
+    """폴더 하나를 처리하고 결과.html 경로를 돌려줌.
+    log(문자열): 진행 메시지 / progress(끝난 수, 전체 수) / stop(): True를 돌려주면 중단"""
+    folder = os.path.abspath(folder)
+    if not os.path.isdir(folder):
+        raise SetupError(f'폴더가 아닙니다: {folder}')
+    srcs = list_images(folder)
     if not srcs:
-        sys.exit(f'이미지가 없습니다: {folder}')
-    cats = load_keywords(os.path.join(HERE, '키워드.txt'))
+        raise SetupError(f'지면 이미지가 없습니다: {folder}\n(jpg, png, tif, webp 등을 넣어 주세요)')
+    kw_path = os.path.join(HERE, '키워드.txt')
+    if not os.path.isfile(kw_path):
+        raise SetupError(f'키워드.txt가 없습니다: {kw_path}')
+    cats = load_keywords(kw_path)
     tess = find_tesseract()
     outdir = os.path.join(folder, '_스크랩후보')
     work = os.path.join(outdir, '.ocr')
     os.makedirs(os.path.join(outdir, '면'), exist_ok=True)
     os.makedirs(work, exist_ok=True)
 
-    print(f'지면 {len(srcs)}면을 읽습니다. (처음 한 번은 면당 10초 안팎, 다시 돌리면 바로 끝납니다)')
+    log(f'지면 {len(srcs)}면을 읽습니다. (처음 한 번은 면당 10초 안팎, 다시 돌리면 바로 끝납니다)')
     t0 = time.time()
     pages, done = [None] * len(srcs), 0
+    if progress:
+        progress(0, len(srcs))
     with ThreadPoolExecutor(max_workers=max(1, (os.cpu_count() or 2))) as ex:
         futs = {ex.submit(ocr_page, tess, s, work): k for k, s in enumerate(srcs)}
         for fu in as_completed(futs):
+            if stop and stop():
+                for f in futs:
+                    f.cancel()
+                raise SetupError('중단했습니다. (이미 읽은 면은 저장돼 있어 다시 돌리면 이어서 빠르게 끝납니다)')
             k = futs[fu]
             try:
-                words, size = fu.result()
+                words, big, size = fu.result()
             except Exception as e:
-                print(f'  ! {os.path.basename(srcs[k])} 읽기 실패: {e}')
-                words, size = [], Image.open(srcs[k]).size
-            info, results = analyze(srcs[k], words, size, cats)
+                log(f'  ! {os.path.basename(srcs[k])} 읽기 실패: {e}')
+                words, big, size = [], [], Image.open(srcs[k]).size
+            info, results = analyze(srcs[k], words, size, cats, big)
             pid = f'p{k + 1:03d}'
             pages[k] = {'id': pid, 'src': srcs[k], 'info': info, 'results': results}
             if results:
                 draw_page(srcs[k], results, cats, os.path.join(outdir, '면', pid + '.jpg'))
             done += 1
             mark = f'후보 {len(results)}건' if results else ''
-            print(f'  [{done}/{len(srcs)}] {os.path.basename(srcs[k])}  {info["media"]} {info["page"]} {mark}')
+            log(f'  [{done}/{len(srcs)}] {os.path.relpath(srcs[k], folder)}  {info["media"]} {info["page"]} {mark}')
+            if progress:
+                progress(done, len(srcs))
 
     out = write_outputs(folder, pages, cats, outdir)
     total = sum(len(p['results']) for p in pages)
-    print(f'\n완료 ({time.time() - t0:.0f}초) · 후보 기사 {total}건')
-    print(f'결과 화면: {out}')
+    log(f'\n완료 ({time.time() - t0:.0f}초) · 후보 기사 {total}건')
+    log(f'결과 화면: {out}')
+    return out
+
+
+def main():
+    if len(sys.argv) >= 2:
+        folder = sys.argv[1]
+    else:
+        folder = input('지면 이미지 폴더를 이 창에 끌어다 놓거나 경로를 붙여넣고 Enter: ')
+    try:
+        out = run(folder.strip().strip('"'))
+    except SetupError as e:
+        sys.exit(str(e))
     if os.name == 'nt':
         os.startfile(out)
 
